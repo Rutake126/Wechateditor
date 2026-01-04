@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>微信公众号 Markdown 排版工具</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Marked.js -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- Phosphor Icons -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+
+    <style>
+        /* 全局重置与字体 */
+        body {
+            margin: 0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            background-color: #f8fafc;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+
+        /* 滚动条美化 */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 3px; }
+        ::-webkit-scrollbar-track { background-color: transparent; }
+
+        /* 编辑器区域 */
+        #editor-container {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            background: white;
+            border-right: 1px solid #e2e8f0;
+        }
+
+        #toolbar {
+            border-bottom: 1px solid #e2e8f0;
+            padding: 8px 16px;
+            display: flex;
+            gap: 8px;
+            background: #fff;
+            flex-wrap: wrap;
+        }
+
+        .tool-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 32px;
+            height: 32px;
+            border-radius: 6px;
+            color: #64748b;
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+        .tool-btn:hover {
+            background-color: #f1f5f9;
+            color: #0f172a;
+        }
+        /* 撤回按钮特殊样式 */
+        .tool-btn.undo-btn:hover {
+            background-color: #fff1f2;
+            color: #e11d48;
+        }
+
+        #editor {
+            flex: 1;
+            width: 100%;
+            padding: 20px;
+            border: none;
+            resize: none;
+            outline: none;
+            font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+            font-size: 15px;
+            line-height: 1.7;
+            color: #334155;
+        }
+
+        /* 侧边栏主题项 */
+        .theme-item {
+            display: flex;
+            align-items: center;
+            padding: 10px 12px;
+            cursor: pointer;
+            border-radius: 6px;
+            transition: all 0.2s;
+            margin-bottom: 4px;
+            color: #475569;
+            font-size: 14px;
+        }
+        .theme-item:hover { background-color: #f1f5f9; }
+        .theme-item.active { background-color: #eff6ff; color: #1d4ed8; font-weight: 500; }
+        .color-dot { width: 10px; height: 10px; border-radius: 50%; margin-right: 10px; border: 1px solid rgba(0,0,0,0.1); }
+
+        /* 背景颜色按钮 */
+        .bg-btn {
+            transition: all 0.2s;
+            position: relative;
+            background-position: center; /* 确保图案居中 */
+        }
+        .bg-btn::after {
+            content: '';
+            position: absolute;
+            top: -3px; left: -3px; right: -3px; bottom: -3px;
+            border-radius: 50%;
+            border: 2px solid transparent;
+            transition: border-color 0.2s;
+        }
+        .bg-btn.active::after {
+            border-color: #3b82f6; /* 选中时的蓝圈 */
+        }
+
+        /* 预览区容器 */
+        #preview-wrapper {
+            background-color: #f1f5f9;
+            background-image: radial-gradient(#e2e8f0 1px, transparent 1px);
+            background-size: 20px 20px;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            padding-top: 40px;
+            overflow-y: auto;
+        }
+
+        /* 手机外壳 */
+        .mobile-shell {
+            width: 375px;
+            min-height: 700px;
+            background: white;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+            margin-bottom: 40px;
+            border-radius: 2px;
+            border: 1px solid #e2e8f0;
+            overflow: hidden; /* 确保背景色不溢出圆角 */
+            display: flex; /* 使用 Flex 布局 */
+            flex-direction: column; /* 垂直方向 */
+        }
+
+        /* 实际预览内容 (微信渲染环境) */
+        #preview-content {
+            padding: 20px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            color: #333;
+            overflow-wrap: break-word;
+            flex: 1; /* 自动填满剩余空间 */
+            min-height: 600px; /* 保持最小高度 */
+            transition: background-color 0.3s; /* 背景切换动画 */
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 顶部导航 -->
+    <header class="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-6 z-20 shadow-sm relative">
+        <div class="flex items-center gap-3">
+            <div class="bg-green-50 p-1.5 rounded-lg">
+                <i class="ph-fill ph-wechat-logo text-green-600 text-2xl"></i>
+            </div>
+            <span class="font-bold text-gray-800 text-lg tracking-tight">WX Editor</span>
+        </div>
+
+        <div class="flex items-center gap-3">
+            <span id="copy-status" class="text-green-600 text-sm font-medium opacity-0 transition-opacity flex items-center gap-1">
+                <i class="ph-bold ph-check"></i> 已复制
+            </span>
+
+            <!-- 复制到公众号按钮 -->
+            <button onclick="copyToWeChat()" class="flex items-center gap-2 bg-gray-900 hover:bg-black text-white px-4 py-1.5 rounded-lg text-sm font-medium transition-colors shadow-sm">
+                <i class="ph-bold ph-copy"></i>
+                复制到公众号
+            </button>
+        </div>
+    </header>
+
+    <!-- 主界面布局 -->
+    <div class="flex-1 flex overflow-hidden">
+
+        <!-- 左侧：编辑器设置 -->
+        <aside class="w-64 bg-white border-r border-gray-200 flex flex-col p-5 z-10 hidden md:flex overflow-y-auto">
+            <h2 class="text-base font-bold text-gray-900 mb-6">编辑器设置</h2>
+
+            <!-- 分区 1：主题风格 -->
+            <div class="mb-8">
+                <div class="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3 px-1">主题风格</div>
+                <div id="theme-list">
+                    <div class="theme-item active" onclick="setTheme('green', this)">
+                        <div class="color-dot bg-[#07c160]"></div>
+                        <span>清新绿</span>
+                    </div>
+                    <!-- 杂志风 -->
+                    <div class="theme-item" onclick="setTheme('magazine', this)">
+                        <div class="color-dot bg-[#8B4513] border-none"></div>
+                        <span>杂志风</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 分区 2：背景设置 -->
+            <div class="mb-8">
+                <div class="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3 px-1">背景设置</div>
+                <div class="flex flex-wrap gap-4 px-1">
+                    <!-- 纯色 -->
+                    <button onclick="setBackground('background-color: #ffffff;', this)"
+                        class="bg-btn active w-8 h-8 rounded-full border border-gray-200 bg-white shadow-sm" title="纯净白"></button>
+
+                    <button onclick="setBackground('background-color: #f9f5f0;', this)"
+                        class="bg-btn w-8 h-8 rounded-full border border-gray-200 bg-[#f9f5f0] shadow-sm" title="温润纸"></button>
+
+                    <button onclick="setBackground('background-color: #f0f9eb;', this)"
+                        class="bg-btn w-8 h-8 rounded-full border border-gray-200 bg-[#f0f9eb] shadow-sm" title="护眼绿"></button>
+
+                    <!-- 方格图案 -->
+                    <button onclick="setBackground('background-color: #ffffff; background-image: linear-gradient(#f0f0f0 1px, transparent 1px), linear-gradient(90deg, #f0f0f0 1px, transparent 1px); background-size: 20px 20px;', this)"
+                        class="bg-btn w-8 h-8 rounded-full border border-gray-200 shadow-sm"
+                        title="方格白"
+                        style="background-color: #ffffff; background-image: linear-gradient(#f0f0f0 1px, transparent 1px), linear-gradient(90deg, #f0f0f0 1px, transparent 1px); background-size: 10px 10px;">
+                    </button>
+
+                    <button onclick="setBackground('background-color: #f9f5f0; background-image: linear-gradient(#eaddd0 1px, transparent 1px), linear-gradient(90deg, #eaddd0 1px, transparent 1px); background-size: 20px 20px;', this)"
+                        class="bg-btn w-8 h-8 rounded-full border border-gray-200 shadow-sm"
+                        title="方格米色"
+                        style="background-color: #f9f5f0; background-image: linear-gradient(#eaddd0 1px, transparent 1px), linear-gradient(90deg, #eaddd0 1px, transparent 1px); background-size: 10px 10px;">
+                    </button>
+                </div>
+            </div>
+
+            <div class="mt-auto">
+                <div class="bg-blue-50 p-3 rounded-lg border border-blue-100">
+                    <p class="text-xs text-blue-800 leading-relaxed">
+                        <i class="ph-fill ph-info mr-1"></i>
+                        提示：排版完成后，点击右上角“复制”按钮，直接粘贴到微信后台即可。
+                    </p>
+                </div>
+            </div>
+        </aside>
+
+        <!-- 中间：编辑器 -->
+        <section id="editor-container" class="flex-1 min-w-[300px]">
+            <!-- 工具栏 -->
+            <div id="toolbar">
+                <!-- 撤回按钮 -->
+                <button class="tool-btn undo-btn" title="撤回" onclick="undo()" id="btn-undo">
+                    <i class="ph-bold ph-arrow-u-up-left"></i>
+                </button>
+                <div class="w-px h-5 bg-gray-200 mx-1"></div>
+
+                <button class="tool-btn" title="加粗" onclick="insertMarkdown('**', '**')"><i class="ph-bold ph-text-b"></i></button>
+                <button class="tool-btn" title="斜体" onclick="insertMarkdown('*', '*')"><i class="ph-bold ph-text-italic"></i></button>
+                <div class="w-px h-5 bg-gray-200 mx-1"></div>
+                <button class="tool-btn" title="一级标题" onclick="insertMarkdown('# ', '')"><i class="ph-bold ph-text-h-one"></i></button>
+                <button class="tool-btn" title="二级标题" onclick="insertMarkdown('## ', '')"><i class="ph-bold ph-text-h-two"></i></button>
+                <button class="tool-btn" title="三级标题" onclick="insertMarkdown('### ', '')"><i class="ph-bold ph-text-h-three"></i></button>
+                <div class="w-px h-5 bg-gray-200 mx-1"></div>
+                <button class="tool-btn" title="引用" onclick="insertMarkdown('> ', '')"><i class="ph-bold ph-quotes"></i></button>
+                <button class="tool-btn" title="代码块" onclick="insertMarkdown('```\\n', '\\n```')"><i class="ph-bold ph-code"></i></button>
+                <button class="tool-btn" title="链接" onclick="insertMarkdown('[', '](url)')"><i class="ph-bold ph-link"></i></button>
+                <!-- 插入图片按钮 -->
+                <button class="tool-btn" title="插入图片" onclick="triggerImageUpload()"><i class="ph-bold ph-image"></i></button>
+                <button class="tool-btn" title="分割线" onclick="insertMarkdown('\n---\n', '')"><i class="ph-bold ph-minus"></i></button>
+            </div>
+            <!-- 隐形的文件上传输入框 -->
+            <input type="file" id="img-upload-input" accept="image/*" style="display: none;" onchange="handleImageUpload(this)">
+
+            <!-- 输入框 -->
+            <textarea id="editor" placeholder="在此输入 Markdown 内容..."></textarea>
+        </section>
+
+        <!-- 右侧：预览区 -->
+        <section id="preview-wrapper" class="flex-1 min-w-[400px] border-l border-gray-200">
+            <div class="mobile-shell">
+                <!-- 移除了顶部的任何状态栏，纯净内容 -->
+                <div id="preview-content">
+                    <!-- 渲染内容 -->
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        // 1. 初始化变量
+        const editor = document.getElementById('editor');
+        const preview = document.getElementById('preview-content');
+        let currentTheme = 'green';
+        // 默认为白色 CSS 字符串
+        let currentBgStyle = 'background-color: #ffffff;';
+
+        // 历史记录变量
+        const historyStack = [];
+        let historyIndex = -1;
+        let lastInputTime = 0;
+
+        // 杂志风标题计数器
+        let magazineCounter = 0;
+
+        // 图片映射表：{ "local-id": { base64: "...", blob: "..." } }
+        const imageMap = new Map();
+
+        // 默认示例文本
+        const defaultText = `# 微信排版工具
+
+欢迎使用 **WX Editor**。
+
+## 杂志风回归
+我们恢复了经典的上下居中布局，视觉效果更强。
+
+## 界面精简
+移除了不常用的图片导出功能，专注于微信图文排版。
+
+> 1. 点击左侧“杂志风”
+> 2. 欣赏 H2 居中标题效果
+> 3. 点击“复制到公众号”
+
+---
+
+### 使用方法
+
+排版完成后，点击右上角 **“复制到公众号”** 按钮即可。
+`;
+
+        // 2. 核心：在光标处插入 Markdown
+        window.insertMarkdown = function(prefix, suffix) {
+            saveHistory();
+
+            const start = editor.selectionStart;
+            const end = editor.selectionEnd;
+            const text = editor.value;
+
+            const before = text.substring(0, start);
+            const selection = text.substring(start, end);
+            const after = text.substring(end);
+
+            editor.value = before + prefix + selection + suffix + after;
+            editor.focus();
+            const newCursorPos = start + prefix.length + selection.length + suffix.length;
+
+            if (selection.length === 0) {
+                editor.setSelectionRange(start + prefix.length, start + prefix.length);
+            } else {
+                editor.setSelectionRange(newCursorPos, newCursorPos);
+            }
+
+            render();
+            saveHistory();
+        };
+
+        // 新增：触发图片上传
+        window.triggerImageUpload = function() {
+            document.getElementById('img-upload-input').click();
+        }
+
+        // 新增：处理图片上传 (优化版：使用 ID 占位)
+        window.handleImageUpload = function(input) {
+            if (input.files && input.files[0]) {
+                const file = input.files[0];
+                const reader = new FileReader();
+
+                // 生成短 ID
+                const id = `local-${Date.now()}`;
+                const blobUrl = URL.createObjectURL(file); // 预览用，速度快，URL短
+
+                reader.onload = function(e) {
+                    const base64Str = e.target.result; // 复制用，数据全
+
+                    // 存入映射表
+                    imageMap.set(id, { base64: base64Str, blob: blobUrl });
+
+                    // 插入简洁的 Markdown 占位符
+                    // 以前是: ![name](data:image...)
+                    // 现在是: ![name](local-123456)
+                    const imgMarkdown = `\n![${file.name}](${id})\n`;
+                    insertMarkdown(imgMarkdown, '');
+
+                    input.value = '';
+                };
+
+                // 读取为 Data URL (Base64)
+                reader.readAsDataURL(file);
+            }
+        }
+
+        // 3. 样式主题配置
+        const themes = {
+            green: {
+                primary: '#07c160',
+                secondary: 'rgba(7, 193, 96, 0.1)',
+                link: '#07c160'
+            },
+            magazine: {
+                primary: '#8B4513', // 棕色
+                secondary: '#ffffff',
+                link: '#8B4513'
+            }
+        };
+
+        // 4. Marked 渲染器
+        const renderer = new marked.Renderer();
+
+        // 自定义代码块渲染
+        renderer.code = function(code, language) {
+            if (typeof code === 'object' && code !== null) {
+                language = code.lang;
+                code = code.text;
+            }
+            const containerStyle = `margin: 20px 0; border-radius: 8px; box-shadow: 0 5px 15px rgba(0,0,0,0.05); overflow: hidden; background: #282c34;`;
+            const headerStyle = `padding: 10px 15px; background: #21252b; display: flex; gap: 6px; border-bottom: 1px solid #181a1f;`;
+            const dotBase = `width: 10px; height: 10px; border-radius: 50%; display: inline-block;`;
+            const preStyle = `margin: 0; padding: 15px; overflow-x: auto; background: #282c34; color: #abb2bf; font-family: Menlo, Monaco, Consolas, "Courier New", monospace; font-size: 13px; line-height: 1.6; border: none;`;
+
+            return `
+                <div style="${containerStyle}">
+                    <div style="${headerStyle}">
+                        <span style="${dotBase} background: #ff5f56;"></span>
+                        <span style="${dotBase} background: #ffbd2e;"></span>
+                        <span style="${dotBase} background: #27c93f;"></span>
+                    </div>
+                    <pre style="${preStyle}"><code style="background:transparent; color:inherit; padding:0;">${code}</code></pre>
+                </div>
+            `;
+        };
+
+        // 自定义图片渲染 (用于预览：使用 Blob URL)
+        renderer.image = function(href, title, text) {
+            // 兼容 marked 新版本 (如果传入的是对象)
+            if (typeof href === 'object' && href !== null) {
+                title = href.title;
+                text = href.text;
+                href = href.href;
+            }
+
+            let src = href;
+            // 如果是本地 ID，替换为 Blob URL
+            if (imageMap.has(href)) {
+                src = imageMap.get(href).blob;
+            }
+            // 返回带样式的图片
+            return `<img src="${src}" alt="${text || ''}" title="${title || ''}" style="display: block; margin: 20px auto; max-width: 100%; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.08);">`;
+        };
+
+        // 自定义标题渲染
+        renderer.heading = function(text, level) {
+            if (typeof text === 'object' && text !== null) {
+                level = text.depth;
+                if (this.parser && this.parser.parseInline) {
+                    text = this.parser.parseInline(text.tokens);
+                } else {
+                    text = text.text;
+                }
+            }
+
+            if (currentTheme === 'magazine' && level === 2) {
+                magazineCounter++;
+                const numStr = magazineCounter < 10 ? `0${magazineCounter}` : `${magazineCounter}`;
+                const numStyle = "display: block; font-family: Impact, 'Arial Black', Arial, sans-serif; font-size: 30px; color: #8B4513; font-weight: bold; line-height: 1; margin-bottom: 5px; text-align: center;";
+                const textStyle = "display: block; font-size: 18px; color: #000000; font-weight: bold; line-height: 1.4; text-align: center;";
+                const containerStyle = "text-align: center; margin: 50px 0 30px 0;";
+
+                return `
+                    <h2 style="${containerStyle}">
+                        <span style="${numStyle}">${numStr}</span>
+                        <span style="${textStyle}">${text}</span>
+                    </h2>
+                `;
+            }
+            return `<h${level}>${text}</h${level}>`;
+        };
+
+        marked.use({ renderer });
+
+        // 5. CSS 生成与注入系统 (与之前相同)
+        const getStyles = (theme, themeName) => ({
+            base: `font-size: 16px; line-height: 1.8; color: #333; text-align: justify; letter-spacing: 0.5px;`,
+            p: `margin: 0 0 20px 0; font-size: 16px; line-height: 1.8; color: #333;`,
+            h1: `font-size: 24px; font-weight: bold; text-align: center; margin: 40px 0 30px 0; color: #333;`,
+            h2: (() => {
+                 if (themeName === 'magazine') return ``;
+                 return `font-size: 16px; font-weight: bold; background: linear-gradient(to right, ${theme.secondary}, transparent); border-left: 4px solid ${theme.primary}; padding: 8px 12px; margin: 40px 0 20px 0; border-radius: 0 4px 4px 0; color: #333;`;
+            })(),
+            h3: (() => {
+                 if (themeName === 'magazine') return `text-align: center; margin: 40px 0 20px 0; font-weight: bold; font-size: 16px; color: #000000;`;
+                 return `font-size: 16px; font-weight: bold; padding-left: 10px; border-left: 3px solid ${theme.primary}; margin: 30px 0 15px 0; color: #333;`;
+            })(),
+            blockquote: `font-size: 15px; color: #555; border-left: 4px solid #dfe1e5; background: #f8f9fa; padding: 15px 20px; margin: 20px 0; border-radius: 4px;`,
+            ul: `margin: 0 0 20px 0; padding-left: 25px; list-style-type: disc; list-style-position: outside;`,
+            ol: `margin: 0 0 20px 0; padding-left: 25px; list-style-type: decimal; list-style-position: outside;`,
+            li: `margin-bottom: 8px;`,
+            strong: `font-weight: bold; color: ${theme.primary};`,
+            code: `font-family: Menlo, Monaco, Consolas, monospace; font-size: 14px; background-color: #f1f5f9; color: #ef4444; padding: 2px 5px; border-radius: 4px;`,
+            hr: `border: none; border-top: 1px solid #eee; margin: 40px 0;`,
+            img: `display: block; margin: 20px auto; max-width: 100%; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.08);`, // 注意：这里的样式作为 fallback
+            link: `color: ${theme.link}; text-decoration: none; border-bottom: 1px solid ${theme.link};`
+        });
+
+        function applyWeChatStyles(container) {
+            const t = themes[currentTheme];
+            const styles = getStyles(t, currentTheme);
+            container.style.cssText = styles.base;
+
+            const traverse = (tag, styleString) => {
+                container.querySelectorAll(tag).forEach(el => {
+                    const existing = el.getAttribute('style') || '';
+                    if (!existing.includes('margin') && styleString) {
+                         el.setAttribute('style', styleString + existing);
+                    }
+                });
+            };
+
+            traverse('p', styles.p);
+            traverse('h1', styles.h1);
+            traverse('h2', styles.h2);
+            traverse('h3', styles.h3);
+            traverse('blockquote', styles.blockquote);
+            traverse('ul', styles.ul);
+            traverse('ol', styles.ol);
+            traverse('li', styles.li);
+            traverse('strong', styles.strong);
+            container.querySelectorAll(':not(pre) > code').forEach(el => el.style.cssText = styles.code);
+            traverse('hr', styles.hr);
+            // img 标签的样式已经在 renderer.image 中内联生成了，这里可以保留作为补充，但主要逻辑在 renderer
+            traverse('img', styles.img);
+            traverse('a', styles.link);
+        }
+
+        function render() {
+            magazineCounter = 0;
+            let markdownText = editor.value;
+            markdownText = markdownText.replace(/^(\s*(?:>\s*)?\d+)\.([^\s\d])/gm, '$1. $2');
+
+            // 预览渲染：使用默认 renderer (包含 Blob URL 逻辑)
+            preview.innerHTML = marked.parse(markdownText);
+            applyWeChatStyles(preview);
+            preview.style.cssText += currentBgStyle;
+        }
+
+        // 6. 切换主题
+        window.setTheme = function(themeName, el) {
+            currentTheme = themeName;
+            document.querySelectorAll('.theme-item').forEach(item => item.classList.remove('active'));
+            if(el) el.classList.add('active');
+            render();
+        }
+
+        // 7. 切换背景
+        window.setBackground = function(cssStr, btn) {
+            currentBgStyle = cssStr;
+            document.querySelectorAll('.bg-btn').forEach(b => b.classList.remove('active'));
+            if(btn) btn.classList.add('active');
+            render();
+        }
+
+        // 8. 复制 (优化版：导出时将 ID 替换为 Base64)
+        window.copyToWeChat = async function() {
+            try {
+                // 1. 准备导出专用的渲染器
+                const exportRenderer = new marked.Renderer();
+
+                // 继承现有逻辑
+                exportRenderer.code = renderer.code;
+
+                // 重置计数器，确保导出时的编号正确
+                let exportCounter = 0;
+                exportRenderer.heading = function(text, level) {
+                    // 这里需要复制 renderer.heading 的逻辑，因为要使用独立的计数器
+                    if (typeof text === 'object' && text !== null) {
+                        level = text.depth;
+                        text = text.text; // 简化处理
+                    }
+                    if (currentTheme === 'magazine' && level === 2) {
+                        exportCounter++;
+                        const numStr = exportCounter < 10 ? `0${exportCounter}` : `${exportCounter}`;
+                        const numStyle = "display: block; font-family: Impact, 'Arial Black', Arial, sans-serif; font-size: 30px; color: #8B4513; font-weight: bold; line-height: 1; margin-bottom: 5px; text-align: center;";
+                        const textStyle = "display: block; font-size: 18px; color: #000000; font-weight: bold; line-height: 1.4; text-align: center;";
+                        const containerStyle = "text-align: center; margin: 50px 0 30px 0;";
+                        return `<h2 style="${containerStyle}"><span style="${numStyle}">${numStr}</span><span style="${textStyle}">${text}</span></h2>`;
+                    }
+                    return `<h${level}>${text}</h${level}>`;
+                };
+
+                // 核心：导出时使用 Base64
+                exportRenderer.image = function(href, title, text) {
+                     // 兼容 marked 新版本 (如果传入的是对象)
+                    if (typeof href === 'object' && href !== null) {
+                        title = href.title;
+                        text = href.text;
+                        href = href.href;
+                    }
+
+                    let src = href;
+                    if (imageMap.has(href)) {
+                        src = imageMap.get(href).base64; // 使用 Base64！
+                    }
+                    return `<img src="${src}" alt="${text || ''}" title="${title || ''}" style="display: block; margin: 20px auto; max-width: 100%; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.08);">`;
+                };
+
+                // 2. 重新解析生成 HTML
+                let markdownText = editor.value;
+                markdownText = markdownText.replace(/^(\s*(?:>\s*)?\d+)\.([^\s\d])/gm, '$1. $2');
+                const html = marked.parse(markdownText, { renderer: exportRenderer });
+
+                // 3. 构建临时 DOM 应用样式
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = html;
+                applyWeChatStyles(tempDiv); // 应用内联样式
+
+                // 4. 包装并复制
+                const finalHtml = `<section id="wx-wrapper" style="font-family: -apple-system, BlinkMacSystemFont, Arial, sans-serif; width: 100%; box-sizing: border-box; overflow-x: hidden; padding: 20px; min-height: 100vh; ${currentBgStyle}">${tempDiv.innerHTML}</section>`;
+
+                const blobInput = new Blob([finalHtml], { type: 'text/html' });
+                await navigator.clipboard.write([new ClipboardItem({ 'text/html': blobInput })]);
+
+                const status = document.getElementById('copy-status');
+                status.classList.remove('opacity-0');
+                setTimeout(() => status.classList.add('opacity-0'), 2000);
+            } catch (err) {
+                console.error(err);
+                alert('复制失败，请尝试全选右侧内容复制。');
+            }
+        }
+
+        // 10. 历史记录 (保持不变)
+        function saveHistory() {
+            if (historyIndex < historyStack.length - 1) {
+                historyStack.splice(historyIndex + 1);
+            }
+            if (historyStack.length === 0 || historyStack[historyStack.length - 1] !== editor.value) {
+                historyStack.push(editor.value);
+                historyIndex++;
+                if (historyStack.length > 50) {
+                    historyStack.shift();
+                    historyIndex--;
+                }
+            }
+        }
+
+        window.undo = function() {
+            if (historyIndex > 0) {
+                historyIndex--;
+                const prevContent = historyStack[historyIndex];
+                editor.value = prevContent;
+                render();
+            }
+        }
+
+        // 11. 启动
+        editor.value = defaultText;
+        saveHistory();
+
+        editor.addEventListener('input', (e) => {
+            render();
+            const now = Date.now();
+            if (now - lastInputTime > 500 || e.data === ' ' || e.inputType === 'insertLineBreak') {
+                saveHistory();
+            }
+            lastInputTime = now;
+        });
+
+        setTheme('green', document.querySelector('.theme-item'));
+    </script>
+</body>
+</html>
