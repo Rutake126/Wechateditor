@@ -303,6 +303,11 @@
 
 欢迎使用 **WX Editor**。
 
+## 列表样式测试 (已修复)
+* **内联样式**：这段加粗文字和圆点在同一行，不会断行，且加粗正常显示。
+* **彩色圆点**：圆点跟随主题色（绿色），文字保持黑色。
+* 普通列表项
+
 ## 杂志风回归
 我们恢复了经典的上下居中布局，视觉效果更强。
 
@@ -369,6 +374,7 @@
 
                     // 插入简洁的 Markdown 占位符
                     // 以前是: ![name](data:image...)
+                    // 以前是: ![name](data:image...)
                     // 现在是: ![name](local-123456)
                     const imgMarkdown = `\n![${file.name}](${id})\n`;
                     insertMarkdown(imgMarkdown, '');
@@ -421,6 +427,49 @@
             `;
         };
 
+        // --- 核心修复：列表项渲染优化 ---
+        // 1. 剥离 Marked 自动生成的 <p> 标签，防止微信列表断行
+        // 2. 将内容包裹在 span 中，以便实现“圆点跟随主题色，文字保持黑色”的效果
+        renderer.listitem = function(text, task, checked) {
+            // --- 修复开始：兼容 Marked 新版本可能传入对象的情况 ---
+            // 之前的错误在于直接取了 token.text (原始文本)，导致没有解析内部的 bold/italic
+            if (typeof text === 'object' && text !== null) {
+                // 优先：如果有 tokens 数组，说明内部还有元素，需要解析它们成 HTML
+                if (text.tokens && this.parser && this.parser.parse) {
+                     text = this.parser.parse(text.tokens);
+                } else if (text.text) {
+                    // 兜底：只有纯文本
+                    text = text.text;
+                } else {
+                    text = '';
+                }
+            }
+            // 确保 text 始终是字符串
+            text = String(text || '');
+            // --- 修复结束 ---
+
+            // 分离嵌套列表（如果有）
+            let content = text;
+            let nestedList = '';
+
+            // 简单的正则匹配嵌套的 ul 或 ol，将其暂存
+            // 注意：Marked 这里的 text 包含了子列表 HTML
+            const listMatch = text.match(/<(ul|ol)[\s\S]*?<\/\1>/);
+            if (listMatch) {
+                nestedList = listMatch[0];
+                content = text.replace(nestedList, '');
+            }
+
+            // 剥离 <p> 标签：这是解决“加粗导致断行”的最关键一步
+            // 将 block 级的 p 移除，保留内部 inline 元素
+            content = content.replace(/^<p>/, '').replace(/<\/p>\n?$/, '');
+
+            // 构造 HTML：
+            // li -> 负责圆点样式（颜色）
+            // span -> 负责文字颜色（重置为黑色）
+            return `<li><span style="color: #333333; line-height: 1.8;">${content}</span>${nestedList}</li>`;
+        };
+
         // 自定义图片渲染 (用于预览：使用 Blob URL)
         renderer.image = function(href, title, text) {
             // 兼容 marked 新版本 (如果传入的是对象)
@@ -469,7 +518,7 @@
 
         marked.use({ renderer });
 
-        // 5. CSS 生成与注入系统 (与之前相同)
+        // 5. CSS 生成与注入系统
         const getStyles = (theme, themeName) => ({
             base: `font-size: 16px; line-height: 1.8; color: #333; text-align: justify; letter-spacing: 0.5px;`,
             p: `margin: 0 0 20px 0; font-size: 16px; line-height: 1.8; color: #333;`,
@@ -483,13 +532,18 @@
                  return `font-size: 16px; font-weight: bold; padding-left: 10px; border-left: 3px solid ${theme.primary}; margin: 30px 0 15px 0; color: #333;`;
             })(),
             blockquote: `font-size: 15px; color: #555; border-left: 4px solid #dfe1e5; background: #f8f9fa; padding: 15px 20px; margin: 20px 0; border-radius: 4px;`,
+
+            // --- 列表样式优化 ---
             ul: `margin: 0 0 20px 0; padding-left: 25px; list-style-type: disc; list-style-position: outside;`,
             ol: `margin: 0 0 20px 0; padding-left: 25px; list-style-type: decimal; list-style-position: outside;`,
-            li: `margin-bottom: 8px;`,
+
+            // 这里的 color 控制圆点颜色
+            li: `margin-bottom: 8px; color: ${theme.primary};`,
+
             strong: `font-weight: bold; color: ${theme.primary};`,
             code: `font-family: Menlo, Monaco, Consolas, monospace; font-size: 14px; background-color: #f1f5f9; color: #ef4444; padding: 2px 5px; border-radius: 4px;`,
             hr: `border: none; border-top: 1px solid #eee; margin: 40px 0;`,
-            img: `display: block; margin: 20px auto; max-width: 100%; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.08);`, // 注意：这里的样式作为 fallback
+            img: `display: block; margin: 20px auto; max-width: 100%; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.08);`,
             link: `color: ${theme.link}; text-decoration: none; border-bottom: 1px solid ${theme.link};`
         });
 
@@ -508,6 +562,13 @@
             };
 
             traverse('p', styles.p);
+
+            // 之前的 li p 修复逻辑可以保留作为保险，但主要依赖 renderer.listitem
+            container.querySelectorAll('li p').forEach(el => {
+                el.style.margin = '0';
+                el.style.display = 'inline';
+            });
+
             traverse('h1', styles.h1);
             traverse('h2', styles.h2);
             traverse('h3', styles.h3);
@@ -518,7 +579,6 @@
             traverse('strong', styles.strong);
             container.querySelectorAll(':not(pre) > code').forEach(el => el.style.cssText = styles.code);
             traverse('hr', styles.hr);
-            // img 标签的样式已经在 renderer.image 中内联生成了，这里可以保留作为补充，但主要逻辑在 renderer
             traverse('img', styles.img);
             traverse('a', styles.link);
         }
@@ -528,7 +588,7 @@
             let markdownText = editor.value;
             markdownText = markdownText.replace(/^(\s*(?:>\s*)?\d+)\.([^\s\d])/gm, '$1. $2');
 
-            // 预览渲染：使用默认 renderer (包含 Blob URL 逻辑)
+            // 预览渲染
             preview.innerHTML = marked.parse(markdownText);
             applyWeChatStyles(preview);
             preview.style.cssText += currentBgStyle;
@@ -550,22 +610,22 @@
             render();
         }
 
-        // 8. 复制 (优化版：导出时将 ID 替换为 Base64)
+        // 8. 复制 (重写优化版：修复背景丢失问题 - 使用 Table 方案)
         window.copyToWeChat = async function() {
             try {
                 // 1. 准备导出专用的渲染器
                 const exportRenderer = new marked.Renderer();
 
-                // 继承现有逻辑
+                // 继承现有逻辑 (代码块、列表、标题、图片)
                 exportRenderer.code = renderer.code;
+                exportRenderer.listitem = renderer.listitem;
 
-                // 重置计数器，确保导出时的编号正确
+                // 标题计数器重置
                 let exportCounter = 0;
                 exportRenderer.heading = function(text, level) {
-                    // 这里需要复制 renderer.heading 的逻辑，因为要使用独立的计数器
                     if (typeof text === 'object' && text !== null) {
                         level = text.depth;
-                        text = text.text; // 简化处理
+                        text = text.text;
                     }
                     if (currentTheme === 'magazine' && level === 2) {
                         exportCounter++;
@@ -578,44 +638,78 @@
                     return `<h${level}>${text}</h${level}>`;
                 };
 
-                // 核心：导出时使用 Base64
+                // 图片转 Base64
                 exportRenderer.image = function(href, title, text) {
-                     // 兼容 marked 新版本 (如果传入的是对象)
                     if (typeof href === 'object' && href !== null) {
                         title = href.title;
                         text = href.text;
                         href = href.href;
                     }
-
                     let src = href;
                     if (imageMap.has(href)) {
-                        src = imageMap.get(href).base64; // 使用 Base64！
+                        src = imageMap.get(href).base64;
                     }
                     return `<img src="${src}" alt="${text || ''}" title="${title || ''}" style="display: block; margin: 20px auto; max-width: 100%; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.08);">`;
                 };
 
-                // 2. 重新解析生成 HTML
+                // 2. 解析 Markdown
                 let markdownText = editor.value;
                 markdownText = markdownText.replace(/^(\s*(?:>\s*)?\d+)\.([^\s\d])/gm, '$1. $2');
                 const html = marked.parse(markdownText, { renderer: exportRenderer });
 
-                // 3. 构建临时 DOM 应用样式
+                // 3. 构建临时容器应用内联样式
                 const tempDiv = document.createElement('div');
                 tempDiv.innerHTML = html;
-                applyWeChatStyles(tempDiv); // 应用内联样式
+                applyWeChatStyles(tempDiv);
 
-                // 4. 包装并复制
-                const finalHtml = `<section id="wx-wrapper" style="font-family: -apple-system, BlinkMacSystemFont, Arial, sans-serif; width: 100%; box-sizing: border-box; overflow-x: hidden; padding: 20px; min-height: 100vh; ${currentBgStyle}">${tempDiv.innerHTML}</section>`;
+                // 4. 构建最终 HTML (Table 方案)
+                // 使用 table > tr > td 结构包裹内容，这是兼容性最强的背景保留方案
+                // table width=100% 确保宽度占满
+                // td 承载背景样式
+                const finalHtml = `
+                    <table width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 0; padding: 0; width: 100% !important;">
+                        <tbody>
+                            <tr>
+                                <td style="padding: 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; ${currentBgStyle}">
+                                    ${tempDiv.innerHTML}
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                `;
 
-                const blobInput = new Blob([finalHtml], { type: 'text/html' });
-                await navigator.clipboard.write([new ClipboardItem({ 'text/html': blobInput })]);
+                // 5. 放入 DOM 进行复制
+                const tempNode = document.createElement('div');
+                // Ensure it's rendered but off-screen
+                tempNode.style.position = 'absolute';
+                tempNode.style.left = '-9999px';
+                tempNode.style.top = '0';
+                tempNode.innerHTML = finalHtml;
+                document.body.appendChild(tempNode);
 
-                const status = document.getElementById('copy-status');
-                status.classList.remove('opacity-0');
-                setTimeout(() => status.classList.add('opacity-0'), 2000);
+                const range = document.createRange();
+                range.selectNode(tempNode.children[0]); // 选中 table 节点
+
+                const selection = window.getSelection();
+                selection.removeAllRanges();
+                selection.addRange(range);
+
+                const successful = document.execCommand('copy');
+
+                document.body.removeChild(tempNode);
+                selection.removeAllRanges();
+
+                if (successful) {
+                    const status = document.getElementById('copy-status');
+                    status.classList.remove('opacity-0');
+                    setTimeout(() => status.classList.add('opacity-0'), 2000);
+                } else {
+                     throw new Error('execCommand copy failed');
+                }
+
             } catch (err) {
                 console.error(err);
-                alert('复制失败，请尝试全选右侧内容复制。');
+                alert('复制失败，请尝试全选右侧内容复制。错误信息: ' + err.message);
             }
         }
 
